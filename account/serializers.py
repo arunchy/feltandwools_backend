@@ -56,6 +56,11 @@ class AccountCreateSerializer(serializers.ModelSerializer):
         return user
 
 
+class GoogleAccountCreateSerializer(serializers.Serializer):
+    id_token=serializers.CharField(required=True)
+    account_type = serializers.ChoiceField(choices=['google', 'facebook', 'email'])
+    
+
 
 class OTPSendSerializer(serializers.Serializer):
     OTP_TYPE_CHOICES = [
@@ -91,3 +96,9 @@ class UserForgetPasswordSerializer(serializers.Serializer):
             })
 
         return attrs   
+    
+class ForgetPasswordOtpSerializer(serializers.Serializer):
+        otp_value=serializers.CharField(required=True)
+        def validate(self,data):
+            if not data.get("otp_value"):
+                raise serializers.ValidationError({'message': 'otp is required...'})

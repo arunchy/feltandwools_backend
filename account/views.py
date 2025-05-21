@@ -1,6 +1,6 @@
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny,IsAuthenticated,IsAdminUser
-from .serializers import OTPSendSerializer,AccountCreateSerializer,UserLoginSerializer,UserForgetPasswordSerializer
+from .serializers import OTPSendSerializer,AccountCreateSerializer,UserLoginSerializer,UserForgetPasswordSerializer,GoogleAccountCreateSerializer,ForgetPasswordOtpSerializer
 from .models import User,AUTH_OTP
 from rest_framework.response import Response
 from rest_framework import status
@@ -59,7 +59,11 @@ class AuthOtpView(APIView):
 class UserSignupView(APIView):
     permission_classes = [AllowAny]
     def post(self, request):
-        serializer = AccountCreateSerializer(data=request.data)
+        account_type=request.data['account_type']
+        if account_type=="email":
+            serializer=AccountCreateSerializer(data=request.data)
+        elif account_type=="google":
+           serializer = GoogleAccountCreateSerializer(data=request.data)
         if serializer.is_valid():
             account_type=serializer.validated_data['account_type']
             if account_type=="email":
@@ -95,19 +99,30 @@ class UserSignupView(APIView):
                  return Response({"message": "Invalid OTP"}, status=status.HTTP_401_UNAUTHORIZED)
             elif account_type == "google":
                 # verify the token id and create use
-                id_token=request.data.get("id_token")
+                id_token=serializer.validated_data['id_token']
                 if not id_token:
                     return Response({
                         "message":"Missing id token"
                     },status=status.HTTP_400_BAD_REQUEST)
                 try:
-                    response=request.get(settings.GOOGLE_TOKEN_INFO_URL,params={"id_token":id_token},timeout=5)
+                    response=requests.get(settings.GOOGLE_TOKEN_INFO_URL,params={"id_token":id_token},timeout=5)
                     if(response.status_code!=200):
                         return Response({
                             "message":"Invalid token"
                         },status=status.HTTP_401_UNAUTHORIZED)
-                    email=serializer.validated_data['email']
-                    user=User.objects.filter(email=email,account_type="google").first()
+                    user_info=response.json()
+                    email=user_info.get("email")
+                    name=user_info.get("name","Google User")
+                    
+                    
+        # 🚫 Check if an email-based account already exists
+                    email_account = User.objects.filter(email=email,             account_type="email").first()
+                    if email_account:
+                     return Response({
+                     "message": "An account with this email already exists using email/password login. Please log in using email."
+                 }, status=status.HTTP_409_CONFLICT)
+                    
+                    user=User.objects.filter(email=email,account_type="google",).first()
                     if user:
                         access_token=AccessToken.for_user(user)
                         refresh_token=RefreshToken.for_user(user)
@@ -117,8 +132,16 @@ class UserSignupView(APIView):
                         response.set_cookie('access_token', str(access_token), httponly=True,samesite='Lax', secure=True)
                         response.set_cookie('refresh_token', str(refresh_token), httponly=True,samesite='Lax', secure=True)
                         return response
-                    user=serializer.save()
-                    access_token = AccessToken.for_use(user)
+                    user=User.objects.create(
+                        name=name,
+                        email=email,
+                        profile_picture=None,
+                        terms_and_condition=True,
+                        account_type="google"
+                    )
+                    user.set_unusable_password()
+                    user.save()
+                    access_token = AccessToken.for_user(user)
                     refresh_token = RefreshToken.for_user(user)
                     response = Response({"message": "Google signup successful"}, status=status.HTTP_200_OK)
                     response.set_cookie('access_token', str(access_token), httponly=True, samesite='Lax',secure=True)
@@ -190,7 +213,7 @@ class UserForgetPasswordView(APIView):
                 return Response({"message": "OTP has expired."}, status=status.HTTP_400_BAD_REQUEST)
 
             # 3. Update the password
-            user = User.objects.filter(email=email).first()
+            user = User.objects.filter(email=email,account_type="email").first()
             if not user:
                 return Response({"message": "User not found."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -199,7 +222,6 @@ class UserForgetPasswordView(APIView):
 
             # 4. Clean up used OTP
             otp_instance.delete()
-
             return Response({"message": "Password updated successfully."}, status=status.HTTP_200_OK)
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)                              
@@ -242,4 +264,9 @@ class GoogleTokenVerificationApiView(APIView):
             return Response({"message": "Unexpected error verifying token"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)         
               
           
-                                       
+class VerifyForgetPasswordOtpView(APIView):
+     def post(self,request):
+          serializer=ForgetPasswordOtpSerializer(data=request.data)
+          if serializer.is_valid():
+                 otp_value=serializer.validated_data['otp_value']
+                                                    
